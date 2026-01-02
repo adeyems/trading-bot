@@ -1,5 +1,6 @@
 import ccxt
 import time
+import requests
 import pandas as pd
 import os
 from dotenv import load_dotenv
@@ -20,6 +21,22 @@ def print_balance(exchange):
     except Exception as e:
         print(f"Error fetching balance: {e}")
 
+def send_discord_alert(message):
+    webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
+    if not webhook_url:
+        print("Discord Webhook URL not set. Skipping alert.")
+        return
+
+    try:
+        response = requests.post(
+            webhook_url, 
+            json={"content": message}, 
+            timeout=5
+        )
+        response.raise_for_status()
+        print("Discord alert sent successfully.")
+    except Exception as e:
+        print(f"Failed to send Discord alert: {e}")
 def execute_trade(exchange, symbol, signal, price):
     """
     Executes trade based on signal and balance availability.
@@ -101,6 +118,11 @@ def run_bot(exchange, last_action, symbol='BTC/USDT'):
                 # Update last_action only if trade succeeded
                 # Also Show updated balance
                 print_balance(exchange)
+                
+                # Send Discord Alert
+                alert_msg = f"TRADE EXECUTED: {signal} {symbol} at {last_close:.2f}"
+                send_discord_alert(alert_msg)
+                
                 return signal
         
         # If HOLD or Trade Failed, keep state
@@ -139,6 +161,7 @@ def main():
     try:
         exchange.load_markets()
         print("Connected to Binance Testnet successfully!")
+        send_discord_alert("Bot started and connected to Binance Testnet successfully!")
     except Exception as e:
         print(f"Connection failed: {e}")
         return
