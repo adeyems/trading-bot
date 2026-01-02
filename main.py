@@ -120,7 +120,8 @@ def run_bot(exchange, last_action, symbol='BTC/USDT'):
                 print_balance(exchange)
                 
                 # Send Discord Alert
-                alert_msg = f"TRADE EXECUTED: {signal} {symbol} at {last_close:.2f}"
+                # Send Discord Alert
+                alert_msg = f"💰 {signal} SIGNAL EXECUTED\nPrice: ${last_close:,.2f}\nAmount: 0.001 BTC"
                 send_discord_alert(alert_msg)
                 
                 return signal
@@ -131,6 +132,7 @@ def run_bot(exchange, last_action, symbol='BTC/USDT'):
 
     except Exception as e:
         print(f"An error occurred: {e}")
+        send_discord_alert("⚠️ CRITICAL ERROR\nBot is restarting...")
         return last_action
 
 def main():
@@ -161,7 +163,8 @@ def main():
     try:
         exchange.load_markets()
         print("Connected to Binance Testnet successfully!")
-        send_discord_alert("Bot started and connected to Binance Testnet successfully!")
+        print("Connected to Binance Testnet successfully!")
+        send_discord_alert("🚀 Bot Deployed! Connected to Binance Testnet in Europe.")
     except Exception as e:
         print(f"Connection failed: {e}")
         return
