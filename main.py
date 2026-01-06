@@ -52,7 +52,7 @@ def execute_trade(exchange, symbol, signal, price):
         
         if signal == 'BUY':
             if usdt_free > 10:
-                print(f"Signal: BUY (Price > SMA) | USDT Free: {usdt_free:.2f}")
+                print(f"Signal: BUY (Price > SMA & RSI < 70) | USDT Free: {usdt_free:.2f}")
                 order = exchange.create_market_buy_order(symbol, amount)
                 print(f"BUY Execution: {order['id']} | Fill Price: {order.get('price', 'Market')}")
                 return True
@@ -62,7 +62,7 @@ def execute_trade(exchange, symbol, signal, price):
                 
         elif signal == 'SELL':
             if btc_free > 0.0005:
-                print(f"Signal: SELL (Price < SMA) | BTC Free: {btc_free:.5f}")
+                print(f"Signal: SELL (Price < SMA or RSI > 80) | BTC Free: {btc_free:.5f}")
                 order = exchange.create_market_sell_order(symbol, amount)
                 print(f"SELL Execution: {order['id']} | Fill Price: {order.get('price', 'Market')}")
                 return True
@@ -87,22 +87,40 @@ def run_bot(exchange, last_action, symbol='BTC/USDT'):
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         
-        # 2. Calculate SMA-20
+        # 2. Calculate SMA-20 and RSI-14
         df['sma_20'] = df['close'].rolling(window=20).mean()
+        
+        # Manual RSI Calculation (EMA based)
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).ewm(com=13, adjust=False).mean()
+        loss = (-delta.where(delta < 0, 0)).ewm(com=13, adjust=False).mean()
+        
+        rs = gain / loss
+        df['rsi_14'] = 100 - (100 / (1 + rs))
         
         last_close = df['close'].iloc[-1]
         last_sma = df['sma_20'].iloc[-1]
+        last_rsi = df['rsi_14'].iloc[-1]
         
         # Determine Trend
         trend = "BULLISH" if last_close > last_sma else "BEARISH"
         
-        print(f"Price: {last_close:.2f} | SMA-20: {last_sma:.2f} | Trend: {trend}")
+        # Determine RSI Status
+        rsi_status = "Neutral"
+        if last_rsi > 70: rsi_status = "Overbought"
+        if last_rsi < 30: rsi_status = "Oversold"
+        
+        print(f"Price: {last_close:.2f} | SMA-20: {last_sma:.2f} | RSI: {last_rsi:.2f} ({rsi_status})")
         
         # 3. Decision Logic
         signal = 'HOLD'
-        if last_close > last_sma:
+        
+        # BUY: Trend is UP and NOT Overbought
+        if last_close > last_sma and last_rsi < 70:
             signal = 'BUY'
-        elif last_close < last_sma:
+            
+        # SELL: Trend is DOWN OR Extremely Overbought
+        elif last_close < last_sma or last_rsi > 80:
             signal = 'SELL'
             
         # 4. State Machine Check
