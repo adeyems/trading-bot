@@ -3,21 +3,31 @@ import time
 import requests
 import pandas as pd
 import os
+import json
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
+# --- Paper Trading Mode ---
+PAPER_MODE = True
+paper_balance = {"USDT": 10000, "BTC": 0}
+
 def print_balance(exchange):
+    global paper_balance
     try:
-        balance = exchange.fetch_balance()
-        print("\n--- Testnet Balance ---")
-        if 'total' in balance:
-            # Print USDT and BTC balances specifically as they are relevant to the pair
-            usdt = balance['total'].get('USDT', 0)
-            btc = balance['total'].get('BTC', 0)
-            print(f"USDT: {usdt}")
-            print(f"BTC:  {btc}")
+        if PAPER_MODE:
+            print("\n--- Paper Balance ---")
+            print(f"USDT: {paper_balance['USDT']:.2f}")
+            print(f"BTC:  {paper_balance['BTC']:.5f}")
+        else:
+            balance = exchange.fetch_balance()
+            print("\n--- Testnet Balance ---")
+            if 'total' in balance:
+                usdt = balance['total'].get('USDT', 0)
+                btc = balance['total'].get('BTC', 0)
+                print(f"USDT: {usdt}")
+                print(f"BTC:  {btc}")
     except Exception as e:
         print(f"Error fetching balance: {e}")
 
@@ -37,37 +47,190 @@ def send_discord_alert(message):
         print("Discord alert sent successfully.")
     except Exception as e:
         print(f"Failed to send Discord alert: {e}")
+        print(f"Failed to send Discord alert: {e}")
+
+# --- Persistence Helper Functions ---
+STATE_FILE = "bot_state.json"
+HISTORY_FILE = "trade_history.json"
+
+def save_state(data):
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"Error saving state: {e}")
+
+def load_state():
+    if not os.path.exists(STATE_FILE):
+        return None
+    try:
+        with open(STATE_FILE, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error loading state: {e}")
+        return None
+
+def log_trade(entry_price, sell_price, amount):
+    try:
+        profit = (sell_price - entry_price) * amount
+        trade_record = {
+            "entry_price": entry_price,
+            "sell_price": sell_price,
+            "amount": amount,
+            "profit_usdt": profit,
+            "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        history = []
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, 'r') as f:
+                try:
+                    history = json.load(f)
+                except:
+                    history = []
+        
+        history.append(trade_record)
+        
+        with open(HISTORY_FILE, 'w') as f:
+            json.dump(history, f, indent=4)
+            
+        print(f"Trade Logged: Profit ${profit:.2f}")
+    except Exception as e:
+        print(f"Error logging trade: {e}")
+
+def get_dynamic_position_size(usdt_balance, btc_price):
+    """
+    Calculate dynamic position size based on historical win rate (Kelly Criterion tiers).
+    Returns: (btc_amount, tier_name, win_rate_percent)
+    """
+    try:
+        # Load trade history
+        history = []
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, 'r') as f:
+                try:
+                    history = json.load(f)
+                except:
+                    history = []
+        
+        # Calculate win rate
+        if len(history) < 5:
+            win_rate = 0.5  # Default
+        else:
+            wins = sum(1 for trade in history if trade.get('profit_usdt', 0) > 0)
+            win_rate = wins / len(history)
+        
+        # Determine tier and risk percentage
+        if win_rate >= 0.60:
+            tier = "Tier 1 (Hot Hand)"
+            risk_pct = 0.02  # 2%
+        elif win_rate >= 0.50:
+            tier = "Tier 2 (Normal)"
+            risk_pct = 0.01  # 1%
+        else:
+            tier = "Tier 3 (Cold)"
+            risk_pct = 0.005  # 0.5%
+        
+        # Calculate position size in USDT
+        position_usdt = usdt_balance * risk_pct
+        
+        # Safety limits
+        min_usdt = 10  # Binance minimum
+        max_usdt = usdt_balance * 0.05  # 5% cap
+        
+        position_usdt = max(min_usdt, min(position_usdt, max_usdt))
+        
+        # Convert to BTC
+        btc_amount = position_usdt / btc_price
+        
+        # Round to appropriate precision (Binance typically uses 5 decimals for BTC)
+        btc_amount = round(btc_amount, 5)
+        
+        win_rate_percent = int(win_rate * 100)
+        
+        print(f"Calculated Position Size: ${position_usdt:.2f} / {btc_amount:.5f} BTC (Win Rate: {win_rate_percent}% - {tier})")
+        
+        return btc_amount, tier, win_rate_percent
+        
+    except Exception as e:
+        print(f"Error calculating position size: {e}. Using minimum.")
+        return max(10 / btc_price, 0.0001), "Tier 2 (Default)", 50
+
 def execute_trade(exchange, symbol, signal, price):
     """
     Executes trade based on signal and balance availability.
     Returns True if trade was executed, False otherwise.
     """
+    global paper_balance
     try:
-        # Fetch Balance First
-        balance = exchange.fetch_balance()
-        usdt_free = balance['total'].get('USDT', 0)
-        btc_free = balance['total'].get('BTC', 0)
+        # Get current price
+        ticker = exchange.fetch_ticker(symbol)
+        btc_price = ticker['last']
         
-        amount = 0.001
+        if PAPER_MODE:
+            usdt_free = paper_balance['USDT']
+            btc_free = paper_balance['BTC']
+        else:
+            balance = exchange.fetch_balance()
+            usdt_free = balance['total'].get('USDT', 0)
+            btc_free = balance['total'].get('BTC', 0)
+        
+        # Dynamic position sizing
+        amount, tier, win_rate = get_dynamic_position_size(usdt_free, btc_price)
         
         if signal == 'BUY':
-            if usdt_free > 10:
+            required_usdt = amount * btc_price
+            if usdt_free > required_usdt and usdt_free > 10:
                 print(f"Signal: BUY (Price > SMA & RSI < 70) | USDT Free: {usdt_free:.2f}")
-                order = exchange.create_market_buy_order(symbol, amount)
-                print(f"BUY Execution: {order['id']} | Fill Price: {order.get('price', 'Market')}")
+                
+                if PAPER_MODE:
+                    # Simulate trade
+                    paper_balance['USDT'] -= required_usdt
+                    paper_balance['BTC'] += amount
+                    print(f"📝 PAPER TRADE: Bought {amount:.5f} BTC at ${btc_price:,.2f}")
+                else:
+                    order = exchange.create_market_buy_order(symbol, amount)
+                    print(f"BUY Execution: {order['id']} | Fill Price: {order.get('price', 'Market')}")
+                
+                # Save State (works for both modes)
+                save_state({
+                    "status": "IN_POSITION",
+                    "entry_price": btc_price,
+                    "amount": amount,
+                    "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')
+                })
+                
                 return True
             else:
-                print(f"Signal is BUY, but already fully invested (No USD). Balance: {usdt_free:.2f} USDT")
+                print(f"Signal is BUY, but insufficient USDT. Required: ${amount * btc_price:.2f}, Available: ${usdt_free:.2f}")
                 return False
                 
         elif signal == 'SELL':
-            if btc_free > 0.0005:
+            state = load_state()
+            if state and state.get('status') == 'IN_POSITION':
+                amount = state.get('amount', amount)
+            
+            if btc_free >= amount:
                 print(f"Signal: SELL (Price < SMA or RSI > 80) | BTC Free: {btc_free:.5f}")
-                order = exchange.create_market_sell_order(symbol, amount)
-                print(f"SELL Execution: {order['id']} | Fill Price: {order.get('price', 'Market')}")
+                
+                if PAPER_MODE:
+                    # Simulate trade
+                    paper_balance['BTC'] -= amount
+                    paper_balance['USDT'] += amount * btc_price
+                    print(f"📝 PAPER TRADE: Sold {amount:.5f} BTC at ${btc_price:,.2f}")
+                else:
+                    order = exchange.create_market_sell_order(symbol, amount)
+                    print(f"SELL Execution: {order['id']} | Fill Price: {order.get('price', 'Market')}")
+                
+                # Log History & Clear State (works for both modes)
+                if state and state.get('status') == 'IN_POSITION':
+                    log_trade(state.get('entry_price', btc_price), btc_price, amount)
+                
+                save_state({"status": "NEUTRAL"})
+                
                 return True
             else:
-                print(f"Signal is SELL, but already sold (No BTC). Balance: {btc_free:.5f} BTC")
+                print(f"Signal is SELL, but insufficient BTC. Required: {amount:.5f}, Available: {btc_free:.5f}")
                 return False
                 
         else:
@@ -154,61 +317,96 @@ def run_bot(exchange, last_action, symbol='BTC/USDT'):
         return last_action
 
 def main():
-    print("Starting Crypto Bot in [TESTNET] mode...")
+    global paper_balance
     
-    api_key = os.getenv('BINANCE_TESTNET_KEY')
-    secret_key = os.getenv('BINANCE_TESTNET_SECRET')
+    if PAPER_MODE:
+        print("\n⚠️ RUNNING IN PAPER MODE (Real Data / Fake Money)")
+        print(f"Starting Paper Balance: ${paper_balance['USDT']:.2f} USDT")
+        
+        # Initialize exchange for public data only (no API keys needed)
+        exchange = ccxt.binance({
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'spot',
+            }
+        })
+        print("--- Using Binance Production API (Public Data Only) ---")
+    else:
+        print("Starting Crypto Bot in [TESTNET] mode...")
+        
+        api_key = os.getenv('BINANCE_TESTNET_KEY')
+        secret_key = os.getenv('BINANCE_TESTNET_SECRET')
 
-    if not api_key or not secret_key:
-        print("Error: BINANCE_TESTNET_KEY or BINANCE_TESTNET_SECRET not found in .env")
-        return
+        if not api_key or not secret_key:
+            print("Error: BINANCE_TESTNET_KEY or BINANCE_TESTNET_SECRET not found in .env")
+            return
 
-    # Initialize Binance Testnet
-    exchange = ccxt.binance({
-        'apiKey': api_key,
-        'secret': secret_key,
-        'enableRateLimit': True,
-        'options': {
-            'defaultType': 'spot',
-        }
-    })
-    
-    # CRITICAL: Enable Sandbox Mode
-    exchange.set_sandbox_mode(True)
-    print("--- Binance Sandbox Mode Enabled ---")
+        exchange = ccxt.binance({
+            'apiKey': api_key,
+            'secret': secret_key,
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'spot',
+            }
+        })
+        exchange.set_sandbox_mode(True)
+        print("--- Binance Sandbox Mode Enabled ---")
     
     # Verify connection
     try:
         exchange.load_markets()
-        print("Connected to Binance Testnet successfully!")
-        print("Connected to Binance Testnet successfully!")
-        send_discord_alert("🚀 Bot Deployed! Connected to Binance Testnet in Europe.")
+        print("Connected to Binance successfully!")
+        if not PAPER_MODE:
+            send_discord_alert("🚀 Bot Deployed! Connected to Binance Testnet.")
     except Exception as e:
         print(f"Connection failed: {e}")
         return
 
-    # --- Initial State Detection ---
     print("Detecting initial state...")
     try:
-        balance = exchange.fetch_balance()
-        usdt_total = balance['total'].get('USDT', 0)
-        btc_total = balance['total'].get('BTC', 0)
+        saved_state = load_state()
+        last_action = None
         
-        # Get current price for valuation
-        ticker = exchange.fetch_ticker('BTC/USDT')
-        current_price = ticker['last']
-        
-        btc_value_in_usdt = btc_total * current_price
-        
-        last_action = 'SELL' # Default to SELL (Cash position)
-        if btc_value_in_usdt > usdt_total:
-            last_action = 'BUY' # Invested position
+        if PAPER_MODE:
+            usdt_total = paper_balance['USDT']
+            btc_total = paper_balance['BTC']
+            btc_price = exchange.fetch_ticker('BTC/USDT')['last']
+            btc_value_in_usdt = btc_total * btc_price
+        else:
+            balance = exchange.fetch_balance()
+            usdt_total = balance['total'].get('USDT', 0)
+            btc_total = balance['total'].get('BTC', 0)
+            btc_value_in_usdt = btc_total * exchange.fetch_ticker('BTC/USDT')['last']
+
+        if saved_state and saved_state.get('status') == 'IN_POSITION':
+            last_action = 'BUY'
+            print(f"🔄 Restored State: Holding BTC (Entry: ${saved_state.get('entry_price', 'Unknown')})")
             
-        print(f"Initial State detected as: {last_action} (BTC Value: ${btc_value_in_usdt:.2f} vs USDT: ${usdt_total:.2f})")
+            # Consistency Check
+            if btc_total < 0.0005: 
+                print("⚠️ CRITICAL WARNING: State says IN_POSITION but Wallet has no BTC!")
+                
+        else:
+            # File says NEUTRAL or doesn't exist. Check Wallet for "Orphans"
+            last_action = 'SELL'
+            if btc_value_in_usdt > 20: # If we have significant BTC > $20
+                print(f"⚠️ State Mismatch: Found orphan BTC (${btc_value_in_usdt:.2f}) in wallet but State File was NEUTRAL/Missing.")
+                last_action = 'BUY' # Assume we are invested to be safe
+                save_state({
+                    "status": "IN_POSITION", 
+                    "entry_price": exchange.fetch_ticker('BTC/USDT')['last'], # Best guess
+                    "amount": btc_total, 
+                    "note": "Recovered from orphan state"
+                })
+            else:
+                 print("State is NEUTRAL. Starting fresh.")
+                 save_state({"status": "NEUTRAL"})
+        
+        print(f"Initial Logic State: {last_action} | Balance: ${usdt_total:.2f} USDT / ${btc_value_in_usdt:.2f} BTC")
         
     except Exception as e:
         print(f"Error detecting initial state: {e}")
-        last_action = None
+        last_action = 'SELL'
 
     print("Starting Trading Loop (Interval: 10s)... Press Ctrl+C to stop.")
     
