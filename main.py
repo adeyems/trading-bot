@@ -380,10 +380,20 @@ def main():
 
         if saved_state and saved_state.get('status') == 'IN_POSITION':
             last_action = 'BUY'
-            print(f"🔄 Restored State: Holding BTC (Entry: ${saved_state.get('entry_price', 'Unknown')})")
+            entry_price = saved_state.get('entry_price', 0)
+            saved_amount = saved_state.get('amount', 0)
             
-            # Consistency Check
-            if btc_total < 0.0005: 
+            print(f"🔄 Restored State: Holding BTC (Entry: ${entry_price:,.2f})")
+            
+            # Hydrate Paper Wallet from saved state
+            if PAPER_MODE and saved_amount > 0:
+                paper_balance['BTC'] = saved_amount
+                paper_balance['USDT'] = 10000 - (entry_price * saved_amount)
+                print(f"🔄 Hydrated Paper Wallet: BTC set to {saved_amount:.5f}")
+                btc_total = paper_balance['BTC']  # Update for consistency check
+            
+            # Consistency Check (skip for paper mode since we just hydrated)
+            if not PAPER_MODE and btc_total < 0.0005: 
                 print("⚠️ CRITICAL WARNING: State says IN_POSITION but Wallet has no BTC!")
                 
         else:
