@@ -1,6 +1,7 @@
 import ccxt
 import time
 import requests
+from database import init_db, log_trade, get_pnl_stats
 import pandas as pd
 import os
 import json
@@ -11,8 +12,8 @@ load_dotenv()
 
 # --- Paper Trading Mode ---
 PAPER_MODE = False
-STOP_LOSS_PCT = 0.02  # 2%
-TAKE_PROFIT_PCT = 0.04  # 4%
+STOP_LOSS_PCT = 0.10  # 10% (Mean Reversion needs room)
+TAKE_PROFIT_PCT = 0.20  # 20%
 INITIAL_CAPITAL = 10000 
 paper_balance = {"USDT": 10000, "BTC": 0}
 
@@ -197,17 +198,24 @@ def execute_trade(exchange, symbol, signal, price, reason=None):
                     order = exchange.create_market_buy_order(symbol, amount)
                     print(f"BUY Execution: {order['id']} | Fill Price: {order.get('price', 'Market')}")
                 
-                # Save State (works for both modes)
-                # Preserve existing stats
-                current_state = load_state()
-                stats = current_state.get('stats', {"wins": 0, "losses": 0, "total_pnl_usdt": 0.0})
-                
-                save_state({
-                    "status": "IN_POSITION",
-                    "entry_price": btc_price,
+                # Log Trade to DB
+                trade_record = {
+                    "symbol": symbol,
+                    "side": "BUY",
+                    "price": btc_price,
                     "amount": amount,
-                    "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
-                    "stats": stats
+                    "strategy": "Mean_Reversion_4H",
+                    "profit": None # Profit is calculated on SELL
+                }
+                log_trade(trade_record)
+                
+                # Update State
+                current_state = load_state()
+                save_state({
+                    "status": "IN_POSITION", 
+                    "entry_price": btc_price, 
+                    "amount": amount, 
+                    "stats": current_state.get('stats')
                 })
                 
                 return True
@@ -219,10 +227,15 @@ def execute_trade(exchange, symbol, signal, price, reason=None):
             state = load_state()
             if state and state.get('status') == 'IN_POSITION':
                 amount = state.get('amount', amount)
+                entry_price = state.get('entry_price', btc_price) # Get entry price from state
+            else:
+                entry_price = btc_price # Fallback if state is missing or not in position
             
             if btc_free >= amount:
-                reason_msg = reason if reason else "Price < SMA or RSI > 80"
+                reason_msg = reason if reason else "RSI > 65 or Stop Loss"
                 print(f"Signal: SELL ({reason_msg}) | BTC Free: {btc_free:.5f}")
+                
+                profit = (btc_price - entry_price) * amount # Calculate profit before state reset
                 
                 if PAPER_MODE:
                     # Simulate trade
@@ -233,24 +246,27 @@ def execute_trade(exchange, symbol, signal, price, reason=None):
                     order = exchange.create_market_sell_order(symbol, amount)
                     print(f"SELL Execution: {order['id']} | Fill Price: {order.get('price', 'Market')}")
                 
-                # Log History & Clear State (works for both modes)
-                if state and state.get('status') == 'IN_POSITION':
-                    entry = state.get('entry_price', btc_price)
-                    log_trade(entry, btc_price, amount)
-                    
-                    # Update Running Tally Stats
-                    profit = (btc_price - entry) * amount
-                    stats = state.get('stats', {"wins": 0, "losses": 0, "total_pnl_usdt": 0.0})
-                    stats['total_pnl_usdt'] += profit
-                    if profit > 0:
-                        stats['wins'] += 1
-                    else:
-                        stats['losses'] += 1
-                        
-                    save_state({"status": "NEUTRAL", "stats": stats})
+                # Log Trade to DB
+                trade_record = {
+                    "symbol": symbol,
+                    "side": "SELL",
+                    "price": btc_price,
+                    "amount": amount,
+                    "strategy": "Mean_Reversion_4H",
+                    "profit": profit
+                }
+                log_trade(trade_record)
+                
+                # Update State Stats (Keep state stats for quick lookups if needed, but DB is source of truth)
+                stats = state.get('stats', {"wins": 0, "losses": 0, "total_pnl_usdt": 0.0})
+                stats['total_pnl_usdt'] += profit
+                if profit > 0:
+                    stats['wins'] += 1
                 else:
-                    # Fallback if state was missing
-                    save_state({"status": "NEUTRAL", "stats": {"wins": 0, "losses": 0, "total_pnl_usdt": 0.0}})
+                    stats['losses'] += 1
+                
+                # Reset State
+                save_state({"status": "NEUTRAL", "stats": stats})
                 
                 return True
             else:
@@ -258,7 +274,7 @@ def execute_trade(exchange, symbol, signal, price, reason=None):
                 return False
                 
         else:
-            print("Signal: HOLD (Price == SMA)")
+            print("Signal: HOLD (RSI between 25 and 65)")
             return False
             
     except Exception as e:
@@ -348,38 +364,31 @@ def log_performance(exchange):
         equity, profit, roi = get_performance_metrics(exchange)
         print(f"📊 EQUITY: ${equity:,.2f} | P&L: { '+' if profit >= 0 else ''}${profit:,.2f} ({ '+' if roi >= 0 else ''}{roi:.2f}%)")
         
-        # Efficiency Check Log
-        state = load_state()
-        stats = state.get('stats', {"wins": 0, "losses": 0})
-        total = stats['wins'] + stats['losses']
-        wr = (stats['wins'] / total * 100) if total > 0 else 0
-        print(f"📊 Efficiency Check: ROI calculated in O(1). Win Rate: {wr:.0f}% (fetched from state).")
+        # Efficiency Check Log (Now using SQL)
+        total_pnl, win_rate, total_trades = get_pnl_stats()
+        print(f"📊 Efficiency Check: Stats fetched via SQL. Win Rate: {win_rate:.0f}% (Trades: {total_trades}).")
         
     except Exception as e:
         print(f"Error logging performance: {e}")
 
 def run_bot(exchange, last_action, symbol='BTC/USDT'):
-    print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Fetching data for {symbol}...")
+    print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Fetching data for {symbol} (4h)...")
     
     try:
         # 1. Fetch History
-        bars = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=100)
+        bars = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=100)
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         
-        # 2. Calculate SMA-20 and RSI-14
-        df['sma_20'] = df['close'].rolling(window=20).mean()
-        
-        # Manual RSI Calculation (EMA based)
+        # 2. Calculate Indicators
+        # RSI 14
         delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).ewm(com=13, adjust=False).mean()
         loss = (-delta.where(delta < 0, 0)).ewm(com=13, adjust=False).mean()
-        
         rs = gain / loss
         df['rsi_14'] = 100 - (100 / (1 + rs))
         
         last_close = df['close'].iloc[-1]
-        last_sma = df['sma_20'].iloc[-1]
         last_rsi = df['rsi_14'].iloc[-1]
         
         # --- Risk Management Check ---
@@ -387,25 +396,22 @@ def run_bot(exchange, last_action, symbol='BTC/USDT'):
         if risk_action:
             return risk_action
         
-        # Determine Trend
-        trend = "BULLISH" if last_close > last_sma else "BEARISH"
-        
         # Determine RSI Status
         rsi_status = "Neutral"
-        if last_rsi > 70: rsi_status = "Overbought"
-        if last_rsi < 30: rsi_status = "Oversold"
+        if last_rsi > 65: rsi_status = "Overbought"
+        if last_rsi < 25: rsi_status = "Oversold"
         
-        print(f"Price: {last_close:.2f} | SMA-20: {last_sma:.2f} | RSI: {last_rsi:.2f} ({rsi_status})")
+        print(f"Price: {last_close:.2f} | RSI: {last_rsi:.2f} ({rsi_status})")
         
-        # 3. Decision Logic
+        # 3. Decision Logic (Mean Reversion)
         signal = 'HOLD'
         
-        # BUY: Trend is UP and NOT Overbought
-        if last_close > last_sma and last_rsi < 70:
+        # BUY: Extreme Oversold (Falling Knife)
+        if last_rsi < 25:
             signal = 'BUY'
             
-        # SELL: Trend is DOWN OR Extremely Overbought
-        elif last_close < last_sma or last_rsi > 80:
+        # SELL: Overbought or Recovered
+        elif last_rsi > 65:
             signal = 'SELL'
             
         # 4. State Machine Check
@@ -483,7 +489,7 @@ def main():
         exchange.load_markets()
         print("Connected to Binance successfully!")
         if not PAPER_MODE:
-            send_discord_alert("🚀 Bot Deployed! Connected to Binance Testnet.")
+            send_discord_alert("🚀 Strategy: Mean Reversion (4H) | Buy: RSI < 25 | SL: 10%")
     except Exception as e:
         print(f"Connection failed: {e}")
         return
