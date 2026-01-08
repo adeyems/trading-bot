@@ -35,6 +35,9 @@ def init_db():
     try:
         Base.metadata.create_all(bind=engine)
         print(f"Database initialized at {DATABASE_URL}")
+    except Exception as e:
+        print(f"Error initializing database: {e}")
+
 def reset_db():
     """Drop and recreate all tables (Fresh Start)."""
     try:
