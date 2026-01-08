@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Paper Trading Mode ---
-PAPER_MODE = False
+PAPER_MODE = True
 STOP_LOSS_PCT = 0.10  # 10% (Mean Reversion needs room)
 TAKE_PROFIT_PCT = 0.20  # 20%
 INITIAL_CAPITAL = 10000 
@@ -450,6 +450,9 @@ def run_bot(exchange, last_action, symbol='BTC/USDT'):
 
 def main():
     global paper_balance
+    
+    # Initialize Database
+    init_db()
     
     if PAPER_MODE:
         print("\n⚠️ RUNNING IN PAPER MODE (Real Data / Fake Money)")
