@@ -10,7 +10,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Paper Trading Mode ---
-PAPER_MODE = True
+PAPER_MODE = False
+STOP_LOSS_PCT = 0.02  # 2%
+TAKE_PROFIT_PCT = 0.04  # 4%
+INITIAL_CAPITAL = 10000 
 paper_balance = {"USDT": 10000, "BTC": 0}
 
 def print_balance(exchange):
@@ -61,14 +64,19 @@ def save_state(data):
         print(f"Error saving state: {e}")
 
 def load_state():
+    default_state = {"status": "NEUTRAL", "stats": {"wins": 0, "losses": 0, "total_pnl_usdt": 0.0}}
     if not os.path.exists(STATE_FILE):
-        return None
+        return default_state
     try:
         with open(STATE_FILE, 'r') as f:
-            return json.load(f)
+            data = json.load(f)
+            # Ensure stats object exists
+            if 'stats' not in data:
+                data['stats'] = default_state['stats']
+            return data
     except Exception as e:
         print(f"Error loading state: {e}")
-        return None
+        return default_state
 
 def log_trade(entry_price, sell_price, amount):
     try:
@@ -104,21 +112,18 @@ def get_dynamic_position_size(usdt_balance, btc_price):
     Returns: (btc_amount, tier_name, win_rate_percent)
     """
     try:
-        # Load trade history
-        history = []
-        if os.path.exists(HISTORY_FILE):
-            with open(HISTORY_FILE, 'r') as f:
-                try:
-                    history = json.load(f)
-                except:
-                    history = []
+        # Logic Update: Fetch stats from state (O(1)) instead of history file
+        state = load_state()
+        stats = state.get('stats', {"wins": 0, "losses": 0})
         
-        # Calculate win rate
-        if len(history) < 5:
+        wins = stats['wins']
+        losses = stats['losses']
+        total_trades = wins + losses
+        
+        if total_trades == 0:
             win_rate = 0.5  # Default
         else:
-            wins = sum(1 for trade in history if trade.get('profit_usdt', 0) > 0)
-            win_rate = wins / len(history)
+            win_rate = wins / total_trades
         
         # Determine tier and risk percentage
         if win_rate >= 0.60:
@@ -156,7 +161,7 @@ def get_dynamic_position_size(usdt_balance, btc_price):
         print(f"Error calculating position size: {e}. Using minimum.")
         return max(10 / btc_price, 0.0001), "Tier 2 (Default)", 50
 
-def execute_trade(exchange, symbol, signal, price):
+def execute_trade(exchange, symbol, signal, price, reason=None):
     """
     Executes trade based on signal and balance availability.
     Returns True if trade was executed, False otherwise.
@@ -193,11 +198,16 @@ def execute_trade(exchange, symbol, signal, price):
                     print(f"BUY Execution: {order['id']} | Fill Price: {order.get('price', 'Market')}")
                 
                 # Save State (works for both modes)
+                # Preserve existing stats
+                current_state = load_state()
+                stats = current_state.get('stats', {"wins": 0, "losses": 0, "total_pnl_usdt": 0.0})
+                
                 save_state({
                     "status": "IN_POSITION",
                     "entry_price": btc_price,
                     "amount": amount,
-                    "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')
+                    "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
+                    "stats": stats
                 })
                 
                 return True
@@ -211,7 +221,8 @@ def execute_trade(exchange, symbol, signal, price):
                 amount = state.get('amount', amount)
             
             if btc_free >= amount:
-                print(f"Signal: SELL (Price < SMA or RSI > 80) | BTC Free: {btc_free:.5f}")
+                reason_msg = reason if reason else "Price < SMA or RSI > 80"
+                print(f"Signal: SELL ({reason_msg}) | BTC Free: {btc_free:.5f}")
                 
                 if PAPER_MODE:
                     # Simulate trade
@@ -224,9 +235,22 @@ def execute_trade(exchange, symbol, signal, price):
                 
                 # Log History & Clear State (works for both modes)
                 if state and state.get('status') == 'IN_POSITION':
-                    log_trade(state.get('entry_price', btc_price), btc_price, amount)
-                
-                save_state({"status": "NEUTRAL"})
+                    entry = state.get('entry_price', btc_price)
+                    log_trade(entry, btc_price, amount)
+                    
+                    # Update Running Tally Stats
+                    profit = (btc_price - entry) * amount
+                    stats = state.get('stats', {"wins": 0, "losses": 0, "total_pnl_usdt": 0.0})
+                    stats['total_pnl_usdt'] += profit
+                    if profit > 0:
+                        stats['wins'] += 1
+                    else:
+                        stats['losses'] += 1
+                        
+                    save_state({"status": "NEUTRAL", "stats": stats})
+                else:
+                    # Fallback if state was missing
+                    save_state({"status": "NEUTRAL", "stats": {"wins": 0, "losses": 0, "total_pnl_usdt": 0.0}})
                 
                 return True
             else:
@@ -240,6 +264,99 @@ def execute_trade(exchange, symbol, signal, price):
     except Exception as e:
         print(f"Error executing trade: {e}")
         return False
+
+def check_risk_exits(exchange, symbol, current_price):
+    """
+    Checks for Stop Loss or Take Profit conditions.
+    Forces a SELL if triggered.
+    """
+    state = load_state()
+    if not state or state.get('status') != 'IN_POSITION':
+        return None
+
+    entry_price = state.get('entry_price')
+    if not entry_price:
+        return None
+
+    # Calculate percentage change
+    pct_change = (current_price - entry_price) / entry_price
+    
+    action = None
+    log_message = ""
+    reason_code = ""
+
+    # Stop Loss Check
+    if pct_change <= -STOP_LOSS_PCT:
+        log_message = f"🛑 STOP LOSS TRIGGERED: Selling at ${current_price:,.0f} (Loss: {pct_change*100:.1f}%)"
+        reason_code = "Stop Loss"
+        action = "SELL"
+        
+    # Take Profit Check
+    elif pct_change >= TAKE_PROFIT_PCT:
+        log_message = f"🥂 TAKE PROFIT TRIGGERED: Selling at ${current_price:,.0f} (Gain: +{pct_change*100:.1f}%)"
+        reason_code = "Take Profit"
+        action = "SELL"
+        
+    if action:
+        print(log_message)
+        # Force SELL
+        executed = execute_trade(exchange, symbol, action, current_price, reason=reason_code)
+        if executed:
+            print_balance(exchange)
+            
+            # --- Get Performance Data for Alert ---
+            equity, profit, roi = get_performance_metrics(exchange, current_price)
+            log_message += f"\n📊 P&L: {'+' if profit >= 0 else ''}${profit:,.2f} ({'+' if roi >= 0 else ''}{roi:.2f}%)"
+            
+            send_discord_alert(log_message)
+            return action
+            
+    return None
+
+def get_performance_metrics(exchange, current_price=None):
+    """
+    Returns (equity, profit, roi).
+    """
+    global paper_balance
+    try:
+        if current_price is None:
+            ticker = exchange.fetch_ticker('BTC/USDT')
+            current_price = ticker['last']
+        
+        if PAPER_MODE:
+            usdt_bal = paper_balance['USDT']
+            btc_bal = paper_balance['BTC']
+        else:
+            balance = exchange.fetch_balance()
+            usdt_bal = balance['total'].get('USDT', 0)
+            btc_bal = balance['total'].get('BTC', 0)
+            
+        equity = usdt_bal + (btc_bal * current_price)
+        profit = equity - INITIAL_CAPITAL
+        roi = (profit / INITIAL_CAPITAL) * 100
+        
+        return equity, profit, roi
+    except Exception as e:
+        print(f"Error calculating metrics: {e}")
+        return 0, 0, 0
+
+def log_performance(exchange):
+    """
+    Calculates and logs the current equity and ROI.
+    """
+    try:
+        equity, profit, roi = get_performance_metrics(exchange)
+        print(f"📊 EQUITY: ${equity:,.2f} | P&L: { '+' if profit >= 0 else ''}${profit:,.2f} ({ '+' if roi >= 0 else ''}{roi:.2f}%)")
+        
+        # Efficiency Check Log
+        state = load_state()
+        stats = state.get('stats', {"wins": 0, "losses": 0})
+        total = stats['wins'] + stats['losses']
+        wr = (stats['wins'] / total * 100) if total > 0 else 0
+        print(f"📊 Efficiency Check: ROI calculated in O(1). Win Rate: {wr:.0f}% (fetched from state).")
+        
+    except Exception as e:
+        print(f"Error logging performance: {e}")
 
 def run_bot(exchange, last_action, symbol='BTC/USDT'):
     print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Fetching data for {symbol}...")
@@ -264,6 +381,11 @@ def run_bot(exchange, last_action, symbol='BTC/USDT'):
         last_close = df['close'].iloc[-1]
         last_sma = df['sma_20'].iloc[-1]
         last_rsi = df['rsi_14'].iloc[-1]
+        
+        # --- Risk Management Check ---
+        risk_action = check_risk_exits(exchange, symbol, last_close)
+        if risk_action:
+            return risk_action
         
         # Determine Trend
         trend = "BULLISH" if last_close > last_sma else "BEARISH"
@@ -301,8 +423,12 @@ def run_bot(exchange, last_action, symbol='BTC/USDT'):
                 print_balance(exchange)
                 
                 # Send Discord Alert
-                # Send Discord Alert
                 alert_msg = f"💰 {signal} SIGNAL EXECUTED\nPrice: ${last_close:,.2f}\nAmount: 0.001 BTC"
+                
+                # --- Get Performance Data for Alert ---
+                equity, profit, roi = get_performance_metrics(exchange, last_close)
+                alert_msg += f"\n📊 P&L: {'+' if profit >= 0 else ''}${profit:,.2f} ({'+' if roi >= 0 else ''}{roi:.2f}%)"
+                
                 send_discord_alert(alert_msg)
                 
                 return signal
@@ -420,8 +546,15 @@ def main():
 
     print("Starting Trading Loop (Interval: 10s)... Press Ctrl+C to stop.")
     
+    loop_count = 0
     while True:
+        loop_count += 1
         last_action = run_bot(exchange, last_action)
+        
+        # Log performance every 360 loops (approx 1 hour at 10s interval)
+        if loop_count % 360 == 0:
+            log_performance(exchange)
+            
         time.sleep(10)
 
 if __name__ == "__main__":
