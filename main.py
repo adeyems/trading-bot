@@ -1,7 +1,7 @@
 import ccxt
 import time
 import requests
-from database import init_db, log_trade, get_pnl_stats
+from database import init_db, log_trade, get_pnl_stats, reset_db
 import pandas as pd
 import os
 import json
@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Paper Trading Mode ---
-PAPER_MODE = False
+PAPER_MODE = True
 STOP_LOSS_PCT = 0.10  # 10% (Mean Reversion needs room)
 TAKE_PROFIT_PCT = 0.20  # 20%
 INITIAL_CAPITAL = 10000 

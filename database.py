@@ -35,8 +35,14 @@ def init_db():
     try:
         Base.metadata.create_all(bind=engine)
         print(f"Database initialized at {DATABASE_URL}")
+def reset_db():
+    """Drop and recreate all tables (Fresh Start)."""
+    try:
+        Base.metadata.drop_all(bind=engine)
+        Base.metadata.create_all(bind=engine)
+        print(f"⚠️  Database Wiped & Recreated at {DATABASE_URL}")
     except Exception as e:
-        print(f"Error initializing database: {e}")
+        print(f"Error resetting database: {e}")
 
 def log_trade(trade_data):
     """
