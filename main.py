@@ -3,7 +3,8 @@ import time
 import requests
 import threading
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from database import init_db, log_trade, get_pnl_stats, get_recent_trades
 import pandas as pd
 import os
@@ -21,6 +22,10 @@ PAPER_MODE = True
 STOP_LOSS_PCT = 0.10  # 10% (Mean Reversion needs room)
 TAKE_PROFIT_PCT = 0.20  # 20%
 INITIAL_CAPITAL = 10000 
+# Dynamic Strategy Parameters
+BUY_RSI_THRESHOLD = 25
+SELL_RSI_THRESHOLD = 65
+
 paper_balance = {"USDT": 10000, "BTC": 0}
 
 def print_balance(exchange):
@@ -404,8 +409,8 @@ def run_bot(exchange, last_action, symbol='BTC/USDT'):
         
         # Determine RSI Status
         rsi_status = "Neutral"
-        if last_rsi > 65: rsi_status = "Overbought"
-        if last_rsi < 25: rsi_status = "Oversold"
+        if last_rsi > SELL_RSI_THRESHOLD: rsi_status = "Overbought"
+        if last_rsi < BUY_RSI_THRESHOLD: rsi_status = "Oversold"
         
         print(f"Price: {last_close:.2f} | RSI: {last_rsi:.2f} ({rsi_status})")
         
@@ -413,11 +418,11 @@ def run_bot(exchange, last_action, symbol='BTC/USDT'):
         signal = 'HOLD'
         
         # BUY: Extreme Oversold (Falling Knife)
-        if last_rsi < 25:
+        if last_rsi < BUY_RSI_THRESHOLD:
             signal = 'BUY'
             
         # SELL: Overbought or Recovered
-        elif last_rsi > 65:
+        elif last_rsi > SELL_RSI_THRESHOLD:
             signal = 'SELL'
             
         # 4. State Machine Check
@@ -589,11 +594,83 @@ def read_trades():
 @app.get("/stats")
 def read_stats():
     total_pnl, win_rate, total_trades = get_pnl_stats()
+    
+    # Get current wallet
+    usdt = 0
+    btc = 0
+    if PAPER_MODE:
+        usdt = paper_balance['USDT']
+        btc = paper_balance['BTC']
+        
     return {
+        "status": "running",
         "total_pnl": total_pnl,
         "win_rate": f"{win_rate:.2f}%",
-        "total_trades": total_trades
+        "total_trades": total_trades,
+        "usdt_balance": usdt,
+        "btc_balance": btc,
+        "config": {
+            "buy_rsi": BUY_RSI_THRESHOLD,
+            "sell_rsi": SELL_RSI_THRESHOLD
+        }
     }
+
+class ConfigUpdate(BaseModel):
+    buy_rsi: int
+    sell_rsi: int
+
+@app.post("/config")
+def update_config(config: ConfigUpdate):
+    global BUY_RSI_THRESHOLD, SELL_RSI_THRESHOLD
+    BUY_RSI_THRESHOLD = config.buy_rsi
+    SELL_RSI_THRESHOLD = config.sell_rsi
+    return {"message": "Configuration updated", "config": config}
+
+@app.post("/trade/{action}")
+def manual_trade(action: str):
+    action = action.upper()
+    if action not in ['BUY', 'SELL']:
+        raise HTTPException(status_code=400, detail="Invalid action. Use BUY or SELL.")
+        
+    # We need to fetch current price to execute
+    try:
+        if PAPER_MODE:
+             # Just init a public exchange instance for price check if using production api
+             # But main() initializes 'exchange' locally. We need access to 'exchange'.
+             # For simplicity, we create a temporary exchange instance here since it's just one call.
+             temp_exchange = ccxt.binance({'enableRateLimit': True, 'options': {'defaultType': 'spot'}})
+             ticker = temp_exchange.fetch_ticker('BTC/USDT')
+             price = ticker['last']
+             
+             success = execute_trade(temp_exchange, 'BTC/USDT', action, price, reason="Manual Override")
+             if success:
+                 return {"message": f"Manual {action} executed successfully"}
+             else:
+                 raise HTTPException(status_code=400, detail="Trade failed (Insufficient balance or error)")
+        else:
+             # In Testnet mode, we need keys. 
+             # Refactoring to make 'exchange' global would be best, but for now:
+             api_key = os.getenv('BINANCE_TESTNET_KEY')
+             secret_key = os.getenv('BINANCE_TESTNET_SECRET')
+             temp_exchange = ccxt.binance({
+                'apiKey': api_key,
+                'secret': secret_key,
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'}
+             })
+             temp_exchange.set_sandbox_mode(True)
+             
+             ticker = temp_exchange.fetch_ticker('BTC/USDT')
+             price = ticker['last']
+             
+             success = execute_trade(temp_exchange, 'BTC/USDT', action, price, reason="Manual Override")
+             if success:
+                 return {"message": f"Manual {action} executed successfully"}
+             else:
+                 raise HTTPException(status_code=400, detail="Trade failed")
+                 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.on_event("startup")
 def startup_event():
