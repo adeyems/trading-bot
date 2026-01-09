@@ -1,7 +1,10 @@
 import ccxt
 import time
 import requests
-from database import init_db, log_trade, get_pnl_stats
+import threading
+import uvicorn
+from fastapi import FastAPI
+from database import init_db, log_trade, get_pnl_stats, get_recent_trades
 import pandas as pd
 import os
 import json
@@ -9,6 +12,9 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Initialize FastAPI
+app = FastAPI()
 
 # --- Paper Trading Mode ---
 PAPER_MODE = True
@@ -448,7 +454,7 @@ def run_bot(exchange, last_action, symbol='BTC/USDT'):
         send_discord_alert("⚠️ CRITICAL ERROR\nBot is restarting...")
         return last_action
 
-def main():
+def start_trading_loop():
     global paper_balance
     
     # Initialize Database
@@ -566,5 +572,34 @@ def main():
             
         time.sleep(10)
 
+# --- FastAPI Endpoints ---
+
+@app.get("/")
+def read_root():
+    return {
+        "status": "online",
+        "paper_mode": PAPER_MODE,
+        "balance": paper_balance if PAPER_MODE else "Testnet (Hidden)"
+    }
+
+@app.get("/trades")
+def read_trades():
+    return get_recent_trades(limit=10)
+
+@app.get("/stats")
+def read_stats():
+    total_pnl, win_rate, total_trades = get_pnl_stats()
+    return {
+        "total_pnl": total_pnl,
+        "win_rate": f"{win_rate:.2f}%",
+        "total_trades": total_trades
+    }
+
+@app.on_event("startup")
+def startup_event():
+    print("Starting Trading Bot in Background Thread...")
+    t = threading.Thread(target=start_trading_loop, daemon=True)
+    t.start()
+    
 if __name__ == "__main__":
-    main()
+    uvicorn.run(app, host="0.0.0.0", port=8000)

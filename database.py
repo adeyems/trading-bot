@@ -106,5 +106,32 @@ def get_pnl_stats():
     finally:
         session.close()
 
+def get_recent_trades(limit=10):
+    """
+    Fetch the last N trades from the database.
+    Returns a list of dictionaries.
+    """
+    session = SessionLocal()
+    try:
+        trades = session.query(Trade).order_by(Trade.timestamp.desc()).limit(limit).all()
+        result = []
+        for t in trades:
+            result.append({
+                "id": t.id,
+                "symbol": t.symbol,
+                "side": t.side,
+                "price": t.price,
+                "amount": t.amount,
+                "profit": t.profit,
+                "strategy": t.strategy,
+                "timestamp": t.timestamp.isoformat()
+            })
+        return result
+    except Exception as e:
+        print(f"Error fetching recent trades: {e}")
+        return []
+    finally:
+        session.close()
+
 if __name__ == "__main__":
     init_db()
