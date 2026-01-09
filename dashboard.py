@@ -39,9 +39,14 @@ def send_command(action):
     except Exception as e:
         st.error(f"Error: {e}")
 
-def update_config(buy_rsi, sell_rsi):
+def update_config(buy_rsi, sell_rsi, stop_loss, take_profit):
     try:
-        payload = {"buy_rsi": buy_rsi, "sell_rsi": sell_rsi}
+        payload = {
+            "buy_rsi": buy_rsi, 
+            "sell_rsi": sell_rsi,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit
+        }
         response = requests.post(f"{API_URL}/config", json=payload)
         if response.status_code == 200:
             st.sidebar.success("✅ Config Updated!")
@@ -49,6 +54,16 @@ def update_config(buy_rsi, sell_rsi):
             st.sidebar.error("❌ Update Failed")
     except:
         st.sidebar.error("Connection Error")
+
+def set_bot_state(state):
+    try:
+        response = requests.post(f"{API_URL}/control/{state}")
+        if response.status_code == 200:
+            st.rerun()
+        else:
+            st.error(f"Failed to {state}")
+    except:
+        st.error("Connection Error")
 
 # --- Sidebar Controls ---
 st.sidebar.header("🕹️ Manual Control")
@@ -64,15 +79,24 @@ stats = fetch_stats()
 if stats and 'config' in stats:
     current_buy = stats['config']['buy_rsi']
     current_sell = stats['config']['sell_rsi']
+    current_sl = stats['config'].get('stop_loss', 0.10)
+    current_tp = stats['config'].get('take_profit', 0.20)
 else:
     current_buy = 25
     current_sell = 65
+    current_sl = 0.10
+    current_tp = 0.20
 
 new_buy = st.sidebar.slider("Buy Threshold (RSI)", 10, 50, current_buy)
 new_sell = st.sidebar.slider("Sell Threshold (RSI)", 50, 90, current_sell)
 
+st.sidebar.markdown("---")
+st.sidebar.header("🛡️ Risk Management")
+new_sl = st.sidebar.slider("Stop Loss (%)", 0.01, 0.50, current_sl, 0.01)
+new_tp = st.sidebar.slider("Take Profit (%)", 0.01, 1.00, current_tp, 0.01)
+
 if st.sidebar.button("Update Parameters"):
-    update_config(new_buy, new_sell)
+    update_config(new_buy, new_sell, new_sl, new_tp)
     time.sleep(1)
     st.rerun()
 
@@ -81,10 +105,33 @@ if not stats:
     st.warning("⚠️ Cannot connect to Bot API. Is it running?")
     st.stop()
 
-# 1. Metrics Row
+# 1. Metrics & Control
+st.markdown("### System Status")
+c1, c2, c3 = st.columns([1, 1, 2])
+
+status = stats.get('status', 'unknown')
+if status == "running":
+    c1.metric("Bot State", "RUNNING 🟢")
+    if c1.button("⏸️ Pause Bot"):
+        set_bot_state("pause")
+elif status == "paused":
+    c1.metric("Bot State", "PAUSED ⏸️")
+    if c1.button("▶️ Resume Bot"):
+        set_bot_state("resume")
+
+# Live RSI Gauge
+current_rsi = stats.get('current_rsi', 50)
+rsi_color = "normal"
+if current_rsi < stats['config']['buy_rsi']: rsi_color = "off" # Greenish signaling buy
+if current_rsi > stats['config']['sell_rsi']: rsi_color = "inverse" # Reddish signaling sell
+
+c2.metric("Live RSI", f"{current_rsi:.2f}", delta=None)
+
+# Financials
+st.markdown("---")
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("Status", "ONLINE 🟢" if stats else "OFFLINE")
-m2.metric("Wallet Balance", f"${stats.get('usdt_balance', 0):,.2f}")
+m1.metric("Wallet Balance", f"${stats.get('usdt_balance', 0):,.2f}")
+m2.metric("BTC Held", f"{stats.get('btc_balance', 0):.5f}")
 m3.metric("Total P&L", f"${stats.get('total_pnl', 0):.2f}")
 m4.metric("Win Rate", stats.get('win_rate', '0%'))
 

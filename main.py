@@ -25,6 +25,9 @@ INITIAL_CAPITAL = 10000
 # Dynamic Strategy Parameters
 BUY_RSI_THRESHOLD = 25
 SELL_RSI_THRESHOLD = 65
+BOT_PAUSED = False
+CURRENT_RSI = 0.0
+
 
 paper_balance = {"USDT": 10000, "BTC": 0}
 
@@ -402,6 +405,15 @@ def run_bot(exchange, last_action, symbol='BTC/USDT'):
         last_close = df['close'].iloc[-1]
         last_rsi = df['rsi_14'].iloc[-1]
         
+        # Update Global RSI for dashboard
+        global CURRENT_RSI
+        CURRENT_RSI = last_rsi
+        
+        # --- Check Pause ---
+        if BOT_PAUSED:
+            print(f"⏸️ BOT PAUSED. RSI: {last_rsi:.2f}. Standing by...")
+            return last_action
+
         # --- Risk Management Check ---
         risk_action = check_risk_exits(exchange, symbol, last_close)
         if risk_action:
@@ -603,28 +615,48 @@ def read_stats():
         btc = paper_balance['BTC']
         
     return {
-        "status": "running",
+        "status": "paused" if BOT_PAUSED else "running",
         "total_pnl": total_pnl,
         "win_rate": f"{win_rate:.2f}%",
         "total_trades": total_trades,
         "usdt_balance": usdt,
         "btc_balance": btc,
+        "current_rsi": CURRENT_RSI,
         "config": {
             "buy_rsi": BUY_RSI_THRESHOLD,
-            "sell_rsi": SELL_RSI_THRESHOLD
+            "sell_rsi": SELL_RSI_THRESHOLD,
+            "stop_loss": STOP_LOSS_PCT,
+            "take_profit": TAKE_PROFIT_PCT
         }
     }
 
 class ConfigUpdate(BaseModel):
     buy_rsi: int
     sell_rsi: int
+    stop_loss: float
+    take_profit: float
 
 @app.post("/config")
 def update_config(config: ConfigUpdate):
-    global BUY_RSI_THRESHOLD, SELL_RSI_THRESHOLD
+    global BUY_RSI_THRESHOLD, SELL_RSI_THRESHOLD, STOP_LOSS_PCT, TAKE_PROFIT_PCT
     BUY_RSI_THRESHOLD = config.buy_rsi
     SELL_RSI_THRESHOLD = config.sell_rsi
+    STOP_LOSS_PCT = config.stop_loss
+    TAKE_PROFIT_PCT = config.take_profit
     return {"message": "Configuration updated", "config": config}
+
+@app.post("/control/{command}")
+def control_bot(command: str):
+    global BOT_PAUSED
+    command = command.lower()
+    if command == "pause":
+        BOT_PAUSED = True
+        return {"status": "paused"}
+    elif command == "resume":
+        BOT_PAUSED = False
+        return {"status": "running"}
+    else:
+        raise HTTPException(status_code=400, detail="Invalid command. Use pause or resume.")
 
 @app.post("/trade/{action}")
 def manual_trade(action: str):
