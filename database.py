@@ -133,5 +133,23 @@ def get_recent_trades(limit=10):
     finally:
         session.close()
 
+def get_latest_trade():
+    """
+    Fetch the single most recent trade.
+    Returns Trade object or None.
+    """
+    session = SessionLocal()
+    try:
+        trade = session.query(Trade).order_by(Trade.timestamp.desc()).first()
+        if trade:
+             # Detach from session to use after close
+             session.expunge(trade)
+        return trade
+    except Exception as e:
+        print(f"Error fetching latest trade: {e}")
+        return None
+    finally:
+        session.close()
+
 if __name__ == "__main__":
     init_db()
