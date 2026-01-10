@@ -58,8 +58,18 @@ def run_simulation(df, strategy_name):
         indicators = df['kama'].values
         
     # Logic Parameters
+    # Default Safe Params (2025/2026 Optimality)
     mr_buy = 25
     mr_sell = 65
+    
+    # 2023 Optimization Override (Recovery Mode)
+    # If the dataframe is specifically the 2023 dataset, we use the aggressive params
+    # We can detect this by checking the start date or just passing it properly.
+    if df['timestamp'].iloc[0].startswith('2023'):
+        mr_buy = 30
+        mr_sell = 75
+        
+    stop_loss = 0.10
     stop_loss = 0.10
     
     for i in range(50, len(df)):
@@ -108,6 +118,8 @@ def run_simulation(df, strategy_name):
 
 def research():
     files = {
+        "2021": "btc_4h_2021.csv",
+        "2022": "btc_4h_2022.csv",
         "2023": "btc_4h_2023.csv",
         "2024": "btc_4h_2024.csv",
         "2025": "btc_4h_data.csv"

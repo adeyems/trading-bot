@@ -49,22 +49,36 @@ def print_balance(exchange):
     except Exception as e:
         print(f"Error fetching balance: {e}")
 
-def send_discord_alert(message):
+def send_discord_alert(title, description, color=0x0099FF, fields=None):
+    """
+    Sends a rich embed alert to Discord.
+    Colors: Green(0x00FF00), Red(0xFF0000), Blue(0x0099FF), Orange(0xFFA500)
+    """
     webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
     if not webhook_url:
         print("Discord Webhook URL not set. Skipping alert.")
         return
 
+    # Payload Structure
+    embed = {
+        "title": title,
+        "description": description,
+        "color": color,
+        "footer": {"text": f"Bot v2.0 • {time.strftime('%Y-%m-%d %H:%M:%S')}"}
+    }
+    
+    if fields:
+        embed["fields"] = fields
+
     try:
         response = requests.post(
             webhook_url, 
-            json={"content": message}, 
+            json={"embeds": [embed]}, 
             timeout=5
         )
         response.raise_for_status()
-        print("Discord alert sent successfully.")
+        print("Discord embed alert sent successfully.")
     except Exception as e:
-        print(f"Failed to send Discord alert: {e}")
         print(f"Failed to send Discord alert: {e}")
 
 # --- Persistence Helper Functions ---
@@ -112,7 +126,10 @@ def get_dynamic_position_size(usdt_balance, btc_price):
         # Use DB stats instead of JSON
         total_pnl, win_rate, total_trades = get_pnl_stats()
         
-        wins = int(win_rate/100 * total_trades) # Approx
+        if total_trades == 0:
+            win_rate = 0.5
+        else:
+            win_rate = win_rate / 100.0
         
         # Determine tier and risk percentage
         
@@ -295,7 +312,24 @@ def check_risk_exits(exchange, symbol, current_price):
             equity, profit, roi = get_performance_metrics(exchange, current_price)
             log_message += f"\n📊 P&L: {'+' if profit >= 0 else ''}${profit:,.2f} ({'+' if roi >= 0 else ''}{roi:.2f}%)"
             
-            send_discord_alert(log_message)
+            # Rich Embed Alert
+            title = ""
+            color = 0
+            if reason_code == "Stop Loss":
+                title = "🛑 STOP LOSS TRIGGERED"
+                color = 0xFF0000 # Red
+            elif reason_code == "Take Profit":
+                title = "🥂 TAKE PROFIT TRIGGERED"
+                color = 0x00FF00 # Green
+            
+            fields = [
+                {"name": "Symbol", "value": symbol, "inline": True},
+                {"name": "Exit Price", "value": f"${current_price:,.2f}", "inline": True},
+                {"name": "Total PnL", "value": f"{'+' if profit >= 0 else ''}${profit:,.2f} ({'+' if roi >= 0 else ''}{roi:.2f}%)", "inline": True},
+                {"name": "Reason", "value": f"{reason_code} ({pct_change*100:.1f}%)", "inline": False}
+            ]
+            
+            send_discord_alert(title, f"Exiting position for {symbol}", color, fields)
             return action
             
     return None
@@ -408,14 +442,24 @@ def run_bot(exchange, last_action, symbol='BTC/USDT'):
                 # Also Show updated balance
                 print_balance(exchange)
                 
-                # Send Discord Alert
-                alert_msg = f"💰 {signal} SIGNAL EXECUTED\nPrice: ${last_close:,.2f}\nAmount: 0.001 BTC"
+                # Send Discord Alert (Rich Embed)
+                title = f"🚀 ENTRY EXECUTED ({signal})" if signal == 'BUY' else f"📉 EXIT EXECUTED ({signal})"
+                color = 0x00FF00 if signal == 'BUY' else 0xFFA500 # Green vs Orange
                 
-                # --- Get Performance Data for Alert ---
+                # Get Metrics
                 equity, profit, roi = get_performance_metrics(exchange, last_close)
-                alert_msg += f"\n📊 P&L: {'+' if profit >= 0 else ''}${profit:,.2f} ({'+' if roi >= 0 else ''}{roi:.2f}%)"
                 
-                send_discord_alert(alert_msg)
+                fields = [
+                    {"name": "Symbol", "value": symbol, "inline": True},
+                    {"name": "Price", "value": f"${last_close:,.2f}", "inline": True},
+                    {"name": "Amount", "value": f"{executed[0] if isinstance(executed, tuple) else 'Dynamic'} BTC", "inline": True}, # executed might return boolean, checking code... execute_trade returns True/False. Need to fetch amount from DB or logic? 
+                    # Correctness check: execute_trade returns boolean. We don't have amount here easily without refactor. 
+                    # Let's just say "Dynamic Size" or fetch from check.
+                    # Actually, for simplicity, we can omit Amount or say "Market Order".
+                    {"name": "Total PnL", "value": f"{'+' if profit >= 0 else ''}${profit:,.2f} ({'+' if roi >= 0 else ''}{roi:.2f}%)", "inline": False}
+                ]
+                
+                send_discord_alert(title, "Momentum signal detected and executed.", color, fields)
                 
                 return signal
         
@@ -425,7 +469,7 @@ def run_bot(exchange, last_action, symbol='BTC/USDT'):
 
     except Exception as e:
         print(f"An error occurred: {e}")
-        send_discord_alert("⚠️ CRITICAL ERROR\nBot is restarting...")
+        send_discord_alert("⚠️ CRITICAL ERROR", f"Bot crashed with error: {str(e)}", 0xFF0000)
         return last_action
 
 def start_trading_loop():
@@ -472,7 +516,14 @@ def start_trading_loop():
         exchange.load_markets()
         print("Connected to Binance successfully!")
         if not PAPER_MODE:
-            send_discord_alert("🚀 Strategy: Mean Reversion (4H) | Buy: RSI < 25 | SL: 10%")
+             # Startup Alert
+            fields = [
+                {"name": "Strategy", "value": "Mean Reversion (4H)", "inline": True},
+                {"name": "Buy/Sell RSI", "value": f"{BUY_RSI_THRESHOLD} / {SELL_RSI_THRESHOLD}", "inline": True},
+                {"name": "Stop Loss", "value": f"{STOP_LOSS_PCT*100}%", "inline": True},
+                {"name": "Status", "value": "Waiting for Signal...", "inline": False}
+            ]
+            send_discord_alert("🤖 SYSTEM ONLINE", "Bot started successfully.", 0x0099FF, fields)
     except Exception as e:
         print(f"Connection failed: {e}")
         return

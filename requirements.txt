@@ -9,3 +9,5 @@ uvicorn
 streamlit
 plotly
 
+pytest
+httpx
