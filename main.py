@@ -277,23 +277,33 @@ def execute_trade(exchange, symbol, signal, price, reason=None, suppress_alert=F
             title = f"🚀 ENTRY EXECUTED ({signal})" if signal == 'BUY' else f"📉 EXIT EXECUTED ({signal})"
             color = 0x00FF00 if signal == 'BUY' else 0xFFA500 # Green vs Orange
             
-            # Get Metrics
-            equity, profit, roi = get_performance_metrics(exchange, price)
-            
-            # Get Position Metrics
+            # Get Performance Metrics
+            equity_total, total_pnl_val, roi = get_performance_metrics(exchange, price)
+
+            # Get Position Metrics (Post-Trade)
             if PAPER_MODE:
                 btc_held = paper_balance['BTC']
+                usdt_free = paper_balance['USDT']
             else:
-                btc_held = exchange.fetch_balance()['total'].get('BTC', 0)
+                bal = exchange.fetch_balance()
+                btc_held = bal['total'].get('BTC', 0)
+                usdt_free = bal['total'].get('USDT', 0)
+            
+            # Calculate Total Equity (Cash + BTC Value)
+            # note: get_performance_metrics already returns equity, but we want to be consistent with breakdown
+            equity = usdt_free + (btc_held * price)
             
             fields = [
                 {"name": "Symbol", "value": symbol, "inline": True},
                 {"name": "Price", "value": f"${price:,.2f}", "inline": True},
                 {"name": "Trade Size", "value": f"{amount:.5f} BTC", "inline": True},
                 {"name": "Reason", "value": reason if reason else "Strategy Signal", "inline": False},
-                {"name": "Total PnL", "value": f"{'+' if pnl_profit >= 0 else ''}${pnl_profit:,.2f} ({'+' if roi >= 0 else ''}{roi:.2f}%)", "inline": True},
-                {"name": "BTC Held", "value": f"{btc_held:.5f} BTC", "inline": True},
-                {"name": "Wallet Value", "value": f"${equity:,.2f}", "inline": True}
+                {"name": "Total PnL", "value": f"{'+' if pnl_profit >= 0 else ''}${pnl_profit:,.2f} ({'+' if roi >= 0 else ''}{roi:.2f}%)", "inline": False},
+                
+                # Wallet Breakdown
+                {"name": "Wallet Total Value", "value": f"${equity:,.2f}", "inline": True},
+                {"name": "USDT Free", "value": f"${usdt_free:,.2f}", "inline": True},
+                {"name": "BTC Held", "value": f"{btc_held:.5f} BTC", "inline": True}
             ]
             
             send_discord_alert(title, "Momentum signal detected and executed.", color, fields)

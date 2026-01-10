@@ -54,10 +54,11 @@ def test_buy_alert_content(mock_metrics, mock_send, mock_stats, mock_state, mock
     assert "Price" in field_names
     assert "Trade Size" in field_names
     assert "BTC Held" in field_names
-    assert "Wallet Value" in field_names # CRITICAL
+    assert "USDT Free" in field_names
+    assert "Wallet Total Value" in field_names
     
     # Check Wallet Value format
-    balance_field = next(f for f in fields if f['name'] == "Wallet Value")
+    balance_field = next(f for f in fields if f['name'] == "Wallet Total Value")
     assert balance_field['value'] == "$10,000.00"
 
 @patch('main.restore_state_from_db')
@@ -99,8 +100,9 @@ def test_sell_alert_content(mock_metrics, mock_send, mock_stats, mock_state, moc
     
     field_names = [f['name'] for f in fields]
     assert "Total PnL" in field_names
-    assert "Wallet Value" in field_names
+    assert "Wallet Total Value" in field_names
     assert "BTC Held" in field_names
+    assert "USDT Free" in field_names
     
     pnl_field = next(f for f in fields if f['name'] == "Total PnL")
     assert "+$1,000.00 (+10.00%)" in pnl_field['value']  # Check Profit calc
