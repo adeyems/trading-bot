@@ -103,34 +103,6 @@ def restore_state_from_db():
         print(f"Error restoring state: {e}")
         return {"status": "NEUTRAL", "entry_price": 0, "amount": 0, "stats": {}}
 
-def log_trade(entry_price, sell_price, amount):
-    try:
-        profit = (sell_price - entry_price) * amount
-        trade_record = {
-            "entry_price": entry_price,
-            "sell_price": sell_price,
-            "amount": amount,
-            "profit_usdt": profit,
-            "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')
-        }
-        
-        history = []
-        if os.path.exists(HISTORY_FILE):
-            with open(HISTORY_FILE, 'r') as f:
-                try:
-                    history = json.load(f)
-                except:
-                    history = []
-        
-        history.append(trade_record)
-        
-        with open(HISTORY_FILE, 'w') as f:
-            json.dump(history, f, indent=4)
-            
-        print(f"Trade Logged: Profit ${profit:.2f}")
-    except Exception as e:
-        print(f"Error logging trade: {e}")
-
 def get_dynamic_position_size(usdt_balance, btc_price):
     """
     Calculate dynamic position size based on historical win rate (Kelly Criterion tiers).
