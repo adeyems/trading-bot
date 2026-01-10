@@ -280,13 +280,20 @@ def execute_trade(exchange, symbol, signal, price, reason=None, suppress_alert=F
             # Get Metrics
             equity, profit, roi = get_performance_metrics(exchange, price)
             
+            # Get Position Metrics
+            if PAPER_MODE:
+                btc_held = paper_balance['BTC']
+            else:
+                btc_held = exchange.fetch_balance()['total'].get('BTC', 0)
+            
             fields = [
                 {"name": "Symbol", "value": symbol, "inline": True},
                 {"name": "Price", "value": f"${price:,.2f}", "inline": True},
-                {"name": "Amount", "value": f"{amount:.5f} BTC", "inline": True},
+                {"name": "Trade Size", "value": f"{amount:.5f} BTC", "inline": True},
                 {"name": "Reason", "value": reason if reason else "Strategy Signal", "inline": False},
                 {"name": "Total PnL", "value": f"{'+' if pnl_profit >= 0 else ''}${pnl_profit:,.2f} ({'+' if roi >= 0 else ''}{roi:.2f}%)", "inline": True},
-                {"name": "Wallet Balance", "value": f"${equity:,.2f}", "inline": True}
+                {"name": "BTC Held", "value": f"{btc_held:.5f} BTC", "inline": True},
+                {"name": "Wallet Value", "value": f"${equity:,.2f}", "inline": True}
             ]
             
             send_discord_alert(title, "Momentum signal detected and executed.", color, fields)
