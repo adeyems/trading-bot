@@ -1,70 +1,61 @@
-# Binance SMA Trading Bot
+# 🤖 Hybrid Algo-Trading Bot (Mean Reversion)
 
-A Python-based crypto trading bot that trades **BTC/USDT** on the **Binance Testnet** using a Simple Moving Average (SMA-20) crossover strategy.
+A professional-grade crypto trading bot that trades **BTC/USDT** on the **Binance Testnet** using a Mean Reversion strategy (RSI + Kelly Criterion). The system features a persistent cloud backend (Railway) and a local command center (Streamlit).
 
-## Features
+## ✨ Features
 
--   **Trend Analysis**: Calculates the 20-period SMA on 1-hour candles to determine BULLISH/BEARISH trends.
--   **Automated Trading**: Executes Market Buy/Sell orders based on trend indicators.
--   **Testnet Ready**: Configured by default for Binance Sandbox Mode (safe testing).
--   **Smart Execution**:
-    -   **Balance Checks**: Prevents orders if funds are insufficient.
-    -   **State Machine**: Prevents duplicate trades (e.g., won't sell if already in a cash position).
-    -   **Startup Detection**: Automatically detects if you are currently "Invested" (BTC) or "Cash" (USDT) at startup.
--   **Deployment Ready**: Includes `Procfile` for easy cloud deployment (Render, Railway, etc.).
+-   **Backend (Railway)**:
+    -   Runs 24/7 in the cloud.
+    -   **Persistence**: PostgreSQL database ensures zero data loss on restarts.
+    -   **Strategy**: Buy Oversold (RSI < 25) / Sell Overbought (RSI > 65).
+    -   **Risk Management**: Dynamic Position Sizing (Kelly Criterion), Stop Loss (10%), Take Profit (20%).
+-   **Frontend (Dashboard)**:
+    -   Local Streamlit app acts as a remote control.
+    -   View Live PnL, Trade History, and Active Positions.
+    -   **Manual Override**: Force BUY/SELL buttons.
+    -   **Dynamic Config**: Adjust RSI/Risk parameters on the fly.
+-   **Alerts**:
+    -   **Premium Discord Embeds**: Rich color-coded cards for Entry, Exit, and Profit.
 
-## Prerequisites
+## 🚀 How to Run
 
--   Python 3.9+
--   A Binance Testnet Account (API Key & Secret)
+### 1. The Backend (Cloud)
+This runs automatically on Railway.
+-   **Logs**: Check Railway Dashboard.
+-   **Status**: Online 24/7.
 
-## Installation
+### 2. The Dashboard (Command Center) 🖥️
+Run this on your local machine to control the bot.
 
-1.  **Clone the repository:**
-    ```bash
-    git clone <repository-url>
-    cd trading-bot
-    ```
-
-2.  **Install dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-3.  **Configure Environment:**
-    Create a `.env` file in the root directory and add your keys:
-    ```env
-    BINANCE_TESTNET_KEY=your_api_key_here
-    BINANCE_TESTNET_SECRET=your_secret_key_here
-    ```
-
-## Usage
-
-### Run Locally
-
-Start the bot:
 ```bash
-python main.py
+# 1. Install dependencies (if new)
+pip install -r requirements.txt
+
+# 2. Launch Dashboard
+python3 -m streamlit run dashboard.py
 ```
-The bot will run in a continuous loop (every 10 seconds), logging price analysis and trade execution to the console.
+*The dashboard will automatically connect to the Production Railway API.*
 
-### Deploy to Cloud
+### 3. Manual Control
+-   **Force BUY/SELL**: Click the buttons in the sidebar to execute immediate market orders.
+-   **Pause Bot**: Stop auto-trading during high volatility.
 
-This project is configured for PaaS deployment.
+## 🛠Configuration
 
-1.  **Push to GitHub**.
-2.  **Connect to Provider** (e.g., Render, Railway).
-3.  **Set Environment Variables** (`BINANCE_TESTNET_KEY`, `BINANCE_TESTNET_SECRET`) in your dashboard.
-4.  **Deploy**. The `Procfile` will automatically start the worker process.
+### Environment Variables (.env / Railway)
+| Variable | Description |
+| :--- | :--- |
+| `BINANCE_TESTNET_KEY` | Your Binance Testnet API Key |
+| `BINANCE_TESTNET_SECRET` | Your Binance Testnet Secret |
+| `DATABASE_URL` | PostgreSQL Connection String |
+| `DISCORD_WEBHOOK_URL` | Discord Webhook for Alerts |
+| `PAPER_MODE` | Set to `True` for paper trading, `False` for Testnet |
 
-## Strategy
-
--   **Timeframe**: 1 Hour
--   **Indicator**: SMA-20
--   **Logic**:
-    -   **BUY**: Close Price > SMA-20 (and currently in Cash position).
-    -   **SELL**: Close Price < SMA-20 (and currently in Invested position).
+## 📊 Strategy Details
+-   **Timeframe**: 4 Hour
+-   **RSI Period**: 14
+-   **Entry**: RSI < 25 (Extreme Fear)
+-   **Exit**: RSI > 65 (Greed) OR Stop Loss hit.
 
 ## Disclaimer
-
-This software is for educational purposes only. Do not use with real funds until you have fully verified the strategy and code integrity. Use at your own risk.
+This software is for educational purposes only. Use at your own risk.
