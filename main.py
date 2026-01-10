@@ -285,7 +285,8 @@ def execute_trade(exchange, symbol, signal, price, reason=None, suppress_alert=F
                 {"name": "Price", "value": f"${price:,.2f}", "inline": True},
                 {"name": "Amount", "value": f"{amount:.5f} BTC", "inline": True},
                 {"name": "Reason", "value": reason if reason else "Strategy Signal", "inline": False},
-                {"name": "Total PnL", "value": f"{'+' if pnl_profit >= 0 else ''}${pnl_profit:,.2f} ({'+' if roi >= 0 else ''}{roi:.2f}%)", "inline": False}
+                {"name": "Total PnL", "value": f"{'+' if pnl_profit >= 0 else ''}${pnl_profit:,.2f} ({'+' if roi >= 0 else ''}{roi:.2f}%)", "inline": True},
+                {"name": "Wallet Balance", "value": f"${equity:,.2f}", "inline": True}
             ]
             
             send_discord_alert(title, "Momentum signal detected and executed.", color, fields)
