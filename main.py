@@ -169,6 +169,7 @@ def get_dynamic_position_size(usdt_balance, btc_price):
         print(f"Error calculating position size: {e}. Using minimum.")
         return max(10 / btc_price, 0.0001), "Tier 2 (Default)", 50
 
+
 def execute_trade(exchange, symbol, signal, price, reason=None, suppress_alert=False):
     """
     Executes trade based on signal and balance availability.
@@ -190,6 +191,9 @@ def execute_trade(exchange, symbol, signal, price, reason=None, suppress_alert=F
         
         # Dynamic position sizing
         amount, tier, win_rate = get_dynamic_position_size(usdt_free, btc_price)
+        
+        trade_successful = False
+        pnl_profit = 0.0
         
         if signal == 'BUY':
             required_usdt = amount * btc_price
@@ -216,7 +220,8 @@ def execute_trade(exchange, symbol, signal, price, reason=None, suppress_alert=F
                 }
                 log_trade(trade_record)
                 
-                return True
+                trade_successful = True
+                
             else:
                 print(f"Signal is BUY, but insufficient USDT. Required: ${amount * btc_price:.2f}, Available: ${usdt_free:.2f}")
                 return False
@@ -234,7 +239,7 @@ def execute_trade(exchange, symbol, signal, price, reason=None, suppress_alert=F
                 reason_msg = reason if reason else "RSI > 65 or Stop Loss"
                 print(f"Signal: SELL ({reason_msg}) | BTC Free: {btc_free:.5f}")
                 
-                profit = (btc_price - entry_price) * amount 
+                pnl_profit = (btc_price - entry_price) * amount 
                 
                 if PAPER_MODE:
                     # Simulate trade
@@ -252,27 +257,28 @@ def execute_trade(exchange, symbol, signal, price, reason=None, suppress_alert=F
                     "price": btc_price,
                     "amount": amount,
                     "strategy": "Mean_Reversion_4H",
-                    "profit": profit
+                    "profit": pnl_profit
                 }
                 log_trade(trade_record)
                 
-                return True
+                trade_successful = True
+                
             else:
                  print(f"Signal is SELL, but insufficient BTC. Required: {amount:.5f}, Available: {btc_free:.5f}")
                  return False
                  
         else:
-            print(f"Signal: HOLD (RSI between {BUY_RSI_THRESHOLD} and {SELL_RSI_THRESHOLD})")
-            return False
-            
-        # --- Manual Alert Logic (Moved Inside) ---
-        if not suppress_alert:
+             print(f"Signal: HOLD (RSI between {BUY_RSI_THRESHOLD} and {SELL_RSI_THRESHOLD})")
+             return False
+             
+        # --- Manual Alert Logic ---
+        if trade_successful and not suppress_alert:
             # Send Discord Alert (Rich Embed)
             title = f"🚀 ENTRY EXECUTED ({signal})" if signal == 'BUY' else f"📉 EXIT EXECUTED ({signal})"
             color = 0x00FF00 if signal == 'BUY' else 0xFFA500 # Green vs Orange
             
             # Get Metrics
-            equity, pnl_profit, roi = get_performance_metrics(exchange, price)
+            equity, profit, roi = get_performance_metrics(exchange, price)
             
             fields = [
                 {"name": "Symbol", "value": symbol, "inline": True},
@@ -284,7 +290,8 @@ def execute_trade(exchange, symbol, signal, price, reason=None, suppress_alert=F
             
             send_discord_alert(title, "Momentum signal detected and executed.", color, fields)
             
-        return True
+        return trade_successful
+
             
     except Exception as e:
         print(f"Error executing trade: {e}")
