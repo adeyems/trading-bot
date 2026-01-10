@@ -637,12 +637,28 @@ def read_stats():
     if PAPER_MODE:
         usdt = paper_balance['USDT']
         btc = paper_balance['BTC']
+    else:
+        # For production balance, we would need keys.
+        # Ideally, main loop updates a global variable with latest balance to avoid API spam here.
+        # But for now, we return what we have (PAPER_MODE is True on production anyway).
+        pass
+
+    # Fetch Price for Equity Calculation
+    try:
+        temp_exchange = ccxt.binance({'enableRateLimit': True})
+        ticker = temp_exchange.fetch_ticker('BTC/USDT')
+        current_price = ticker['last']
+    except:
+        current_price = 0
+        
+    total_equity = usdt + (btc * current_price)
         
     return {
         "status": "paused" if BOT_PAUSED else "running",
         "total_pnl": total_pnl,
         "win_rate": f"{win_rate:.2f}%",
         "total_trades": total_trades,
+        "wallet_value": total_equity, # New Field
         "usdt_balance": usdt,
         "btc_balance": btc,
         "current_rsi": CURRENT_RSI,
