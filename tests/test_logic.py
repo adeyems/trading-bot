@@ -4,6 +4,14 @@ from main import get_dynamic_position_size, check_risk_exits
 from database import log_trade
 import main
 
+@pytest.fixture(autouse=True)
+def mock_dependencies():
+    with patch('main.send_discord_alert') as mock_alert, \
+         patch('main.get_performance_metrics') as mock_metrics:
+        # Default mock returns
+        mock_metrics.return_value = (10500.0, 500.0, 5.0)
+        yield
+
 def test_dynamic_position_size_tiers(db_session):
     # Case 1: No history (Default 50% win rate -> Normal Tier)
     amount, tier, win_rate = get_dynamic_position_size(10000, 50000)

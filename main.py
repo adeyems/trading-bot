@@ -169,7 +169,7 @@ def get_dynamic_position_size(usdt_balance, btc_price):
         print(f"Error calculating position size: {e}. Using minimum.")
         return max(10 / btc_price, 0.0001), "Tier 2 (Default)", 50
 
-def execute_trade(exchange, symbol, signal, price, reason=None):
+def execute_trade(exchange, symbol, signal, price, reason=None, suppress_alert=False):
     """
     Executes trade based on signal and balance availability.
     Returns True if trade was executed, False otherwise.
@@ -258,12 +258,33 @@ def execute_trade(exchange, symbol, signal, price, reason=None):
                 
                 return True
             else:
-                print(f"Signal is SELL, but insufficient BTC. Required: {amount:.5f}, Available: {btc_free:.5f}")
-                return False
-                
+                 print(f"Signal is SELL, but insufficient BTC. Required: {amount:.5f}, Available: {btc_free:.5f}")
+                 return False
+                 
         else:
             print(f"Signal: HOLD (RSI between {BUY_RSI_THRESHOLD} and {SELL_RSI_THRESHOLD})")
             return False
+            
+        # --- Manual Alert Logic (Moved Inside) ---
+        if not suppress_alert:
+            # Send Discord Alert (Rich Embed)
+            title = f"🚀 ENTRY EXECUTED ({signal})" if signal == 'BUY' else f"📉 EXIT EXECUTED ({signal})"
+            color = 0x00FF00 if signal == 'BUY' else 0xFFA500 # Green vs Orange
+            
+            # Get Metrics
+            equity, pnl_profit, roi = get_performance_metrics(exchange, price)
+            
+            fields = [
+                {"name": "Symbol", "value": symbol, "inline": True},
+                {"name": "Price", "value": f"${price:,.2f}", "inline": True},
+                {"name": "Amount", "value": f"{amount:.5f} BTC", "inline": True},
+                {"name": "Reason", "value": reason if reason else "Strategy Signal", "inline": False},
+                {"name": "Total PnL", "value": f"{'+' if pnl_profit >= 0 else ''}${pnl_profit:,.2f} ({'+' if roi >= 0 else ''}{roi:.2f}%)", "inline": False}
+            ]
+            
+            send_discord_alert(title, "Momentum signal detected and executed.", color, fields)
+            
+        return True
             
     except Exception as e:
         print(f"Error executing trade: {e}")
@@ -304,7 +325,8 @@ def check_risk_exits(exchange, symbol, current_price):
     if action:
         print(log_message)
         # Force SELL
-        executed = execute_trade(exchange, symbol, action, current_price, reason=reason_code)
+        # Force SELL
+        executed = execute_trade(exchange, symbol, action, current_price, reason=reason_code, suppress_alert=True)
         if executed:
             print_balance(exchange)
             
@@ -442,24 +464,9 @@ def run_bot(exchange, last_action, symbol='BTC/USDT'):
                 # Also Show updated balance
                 print_balance(exchange)
                 
-                # Send Discord Alert (Rich Embed)
-                title = f"🚀 ENTRY EXECUTED ({signal})" if signal == 'BUY' else f"📉 EXIT EXECUTED ({signal})"
-                color = 0x00FF00 if signal == 'BUY' else 0xFFA500 # Green vs Orange
+                # Alert is now handled inside execute_trade
                 
-                # Get Metrics
-                equity, profit, roi = get_performance_metrics(exchange, last_close)
-                
-                fields = [
-                    {"name": "Symbol", "value": symbol, "inline": True},
-                    {"name": "Price", "value": f"${last_close:,.2f}", "inline": True},
-                    {"name": "Amount", "value": f"{executed[0] if isinstance(executed, tuple) else 'Dynamic'} BTC", "inline": True}, # executed might return boolean, checking code... execute_trade returns True/False. Need to fetch amount from DB or logic? 
-                    # Correctness check: execute_trade returns boolean. We don't have amount here easily without refactor. 
-                    # Let's just say "Dynamic Size" or fetch from check.
-                    # Actually, for simplicity, we can omit Amount or say "Market Order".
-                    {"name": "Total PnL", "value": f"{'+' if profit >= 0 else ''}${profit:,.2f} ({'+' if roi >= 0 else ''}{roi:.2f}%)", "inline": False}
-                ]
-                
-                send_discord_alert(title, "Momentum signal detected and executed.", color, fields)
+                return signal
                 
                 return signal
         
