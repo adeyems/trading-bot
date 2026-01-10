@@ -7,8 +7,10 @@ from datetime import datetime
 # Load environment variables
 dotenv.load_dotenv()
 
-# Get Database URL (Default to a local sqlite file if not set, for safety/testing)
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./trading_bot.db")
+# Get Database URL
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("CRITICAL: DATABASE_URL is not set. Bot cannot run without durable storage.")
 
 # Setup SQLAlchemy
 engine = create_engine(DATABASE_URL)
